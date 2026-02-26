@@ -9,7 +9,7 @@
   html, body {
     width: 100%; height: 100%;
     overflow: hidden;
-    background: #0a0a1a;
+    background: #f5f0e8;
     font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
     touch-action: none;
     -webkit-touch-callout: none;
@@ -513,20 +513,20 @@ function startGame() {
 
 // ---- Rendering ----
 function drawBackground() {
-  // Deep gradient bg
+  // Warm cream/paper background
   const grad = ctx.createLinearGradient(0, 0, 0, H);
-  grad.addColorStop(0, '#0d0d2b');
-  grad.addColorStop(0.5, '#1a1a3e');
-  grad.addColorStop(1, '#0d0d2b');
+  grad.addColorStop(0, '#f5f0e8');
+  grad.addColorStop(0.5, '#ede6d8');
+  grad.addColorStop(1, '#f0ead8');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, W, H);
 
-  // Subtle stars
-  ctx.fillStyle = 'rgba(255,255,255,0.03)';
+  // Subtle dot pattern
+  ctx.fillStyle = 'rgba(180, 160, 130, 0.08)';
   for (let i = 0; i < 50; i++) {
     const sx = (Math.sin(i * 127.1) * 0.5 + 0.5) * W;
     const sy = (Math.cos(i * 311.7) * 0.5 + 0.5) * H;
-    const sr = 1 + (i % 3);
+    const sr = 2 + (i % 2);
     ctx.beginPath();
     ctx.arc(sx, sy, sr, 0, Math.PI * 2);
     ctx.fill();
@@ -534,10 +534,10 @@ function drawBackground() {
 }
 
 function drawContainer() {
-  // Container bg with subtle gradient
+  // Container bg - warm wood-like tone
   const cGrad = ctx.createLinearGradient(CONTAINER_X, CONTAINER_Y, CONTAINER_X, CONTAINER_Y + CONTAINER_H);
-  cGrad.addColorStop(0, 'rgba(20, 20, 60, 0.6)');
-  cGrad.addColorStop(1, 'rgba(10, 10, 40, 0.8)');
+  cGrad.addColorStop(0, 'rgba(220, 200, 170, 0.4)');
+  cGrad.addColorStop(1, 'rgba(200, 180, 150, 0.6)');
   ctx.fillStyle = cGrad;
 
   // Rounded rect container
@@ -555,8 +555,8 @@ function drawContainer() {
   ctx.closePath();
   ctx.fill();
 
-  // Container border - glowing
-  ctx.strokeStyle = 'rgba(100, 100, 255, 0.3)';
+  // Container border - warm brown
+  ctx.strokeStyle = 'rgba(160, 130, 90, 0.5)';
   ctx.lineWidth = 2 * SCALE;
   ctx.stroke();
 
@@ -647,7 +647,7 @@ function drawScorePopups() {
     const alpha = p.life;
     const yOff = (1 - p.life) * 60 * SCALE;
     ctx.globalAlpha = alpha;
-    ctx.fillStyle = p.isCombo ? '#ffe082' : '#fff';
+    ctx.fillStyle = p.isCombo ? '#c0843a' : '#5a3e1b';
     ctx.font = `bold ${(p.isCombo ? 22 : 18) * SCALE}px system-ui`;
     ctx.textAlign = 'center';
     ctx.fillText('+' + Math.floor(p.value), p.x, p.y - yOff);
@@ -692,28 +692,28 @@ function drawUI() {
   const panelY = 12 * SCALE;
 
   // Score
-  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.fillStyle = 'rgba(80, 60, 30, 0.9)';
   ctx.font = `bold ${24 * SCALE}px system-ui`;
   ctx.textAlign = 'left';
   ctx.fillText(Math.floor(score).toLocaleString(), panelX + 5, panelY + 28 * SCALE);
 
-  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.fillStyle = 'rgba(80, 60, 30, 0.5)';
   ctx.font = `${12 * SCALE}px system-ui`;
   ctx.fillText('SCORE', panelX + 5, panelY + 8 * SCALE);
 
   // High score
   ctx.textAlign = 'right';
-  ctx.fillStyle = 'rgba(255,215,0,0.7)';
+  ctx.fillStyle = 'rgba(180, 130, 20, 0.8)';
   ctx.font = `bold ${16 * SCALE}px system-ui`;
   ctx.fillText(Math.floor(highScore).toLocaleString(), panelX + panelW - 5, panelY + 28 * SCALE);
 
-  ctx.fillStyle = 'rgba(255,215,0,0.4)';
+  ctx.fillStyle = 'rgba(180, 130, 20, 0.5)';
   ctx.font = `${12 * SCALE}px system-ui`;
   ctx.fillText('BEST', panelX + panelW - 5, panelY + 8 * SCALE);
 
   // Next piece preview
   ctx.textAlign = 'center';
-  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.fillStyle = 'rgba(80, 60, 30, 0.5)';
   ctx.font = `${11 * SCALE}px system-ui`;
   const nextX = panelX + panelW / 2;
   ctx.fillText('NEXT', nextX, panelY + 8 * SCALE);
@@ -743,16 +743,16 @@ function drawTitleScreen() {
   const titleY = H * 0.28;
   ctx.textAlign = 'center';
 
-  // Glow
-  ctx.shadowColor = '#8b5cf6';
-  ctx.shadowBlur = 30 + Math.sin(titlePulse) * 10;
-  ctx.fillStyle = '#fff';
+  // Title text - warm brown
+  ctx.shadowColor = 'rgba(200, 160, 80, 0.4)';
+  ctx.shadowBlur = 20 + Math.sin(titlePulse) * 8;
+  ctx.fillStyle = '#5a3e1b';
   ctx.font = `bold ${48 * SCALE}px system-ui`;
   ctx.fillText('FRUIT DROP', W / 2, titleY);
   ctx.shadowBlur = 0;
 
   // Subtitle
-  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.fillStyle = 'rgba(80, 60, 30, 0.5)';
   ctx.font = `${16 * SCALE}px system-ui`;
   ctx.fillText('A Merge Puzzle Game', W / 2, titleY + 38 * SCALE);
 
@@ -774,20 +774,20 @@ function drawTitleScreen() {
   ctx.globalAlpha = 1;
 
   // Tap to start
-  const startAlpha = 0.5 + Math.sin(titlePulse * 2) * 0.3;
-  ctx.fillStyle = `rgba(255, 255, 255, ${startAlpha})`;
+  const startAlpha = 0.4 + Math.sin(titlePulse * 2) * 0.3;
+  ctx.fillStyle = `rgba(80, 60, 30, ${startAlpha})`;
   ctx.font = `${20 * SCALE}px system-ui`;
   ctx.fillText('Tap to Start', W / 2, H * 0.72);
 
   // High score
   if (highScore > 0) {
-    ctx.fillStyle = 'rgba(255,215,0,0.6)';
+    ctx.fillStyle = 'rgba(180, 130, 20, 0.7)';
     ctx.font = `${14 * SCALE}px system-ui`;
     ctx.fillText(`Best: ${highScore.toLocaleString()}`, W / 2, H * 0.78);
   }
 
   // How to play
-  ctx.fillStyle = 'rgba(255,255,255,0.25)';
+  ctx.fillStyle = 'rgba(80, 60, 30, 0.3)';
   ctx.font = `${12 * SCALE}px system-ui`;
   ctx.fillText('Drop fruits. Match pairs to merge!', W / 2, H * 0.88);
 }
@@ -795,27 +795,27 @@ function drawTitleScreen() {
 function drawGameOver() {
   gameOverAlpha = Math.min(1, gameOverAlpha + 0.02);
 
-  // Dark overlay
-  ctx.fillStyle = `rgba(0, 0, 0, ${gameOverAlpha * 0.7})`;
+  // Warm overlay
+  ctx.fillStyle = `rgba(240, 230, 210, ${gameOverAlpha * 0.85})`;
   ctx.fillRect(0, 0, W, H);
 
   ctx.globalAlpha = gameOverAlpha;
   ctx.textAlign = 'center';
 
   // Game Over text
-  ctx.shadowColor = '#e74c3c';
-  ctx.shadowBlur = 20;
-  ctx.fillStyle = '#fff';
+  ctx.shadowColor = 'rgba(200, 100, 50, 0.4)';
+  ctx.shadowBlur = 15;
+  ctx.fillStyle = '#5a3e1b';
   ctx.font = `bold ${42 * SCALE}px system-ui`;
   ctx.fillText('GAME OVER', W / 2, H / 2 - 60 * SCALE);
   ctx.shadowBlur = 0;
 
   // Final score
-  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.fillStyle = 'rgba(80, 60, 30, 0.9)';
   ctx.font = `bold ${28 * SCALE}px system-ui`;
   ctx.fillText(Math.floor(score).toLocaleString(), W / 2, H / 2 - 10 * SCALE);
 
-  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.fillStyle = 'rgba(80, 60, 30, 0.5)';
   ctx.font = `${14 * SCALE}px system-ui`;
   ctx.fillText('SCORE', W / 2, H / 2 - 35 * SCALE);
 
@@ -834,8 +834,8 @@ function drawGameOver() {
 
   // Button bg
   const btnGrad = ctx.createLinearGradient(btnX - btnW/2, btnY - btnH/2, btnX + btnW/2, btnY + btnH/2);
-  btnGrad.addColorStop(0, '#7c3aed');
-  btnGrad.addColorStop(1, '#5b21b6');
+  btnGrad.addColorStop(0, '#c0843a');
+  btnGrad.addColorStop(1, '#8b5e2a');
   ctx.fillStyle = btnGrad;
   const btnR = 12 * SCALE;
   ctx.beginPath();
