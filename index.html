@@ -426,6 +426,8 @@ function getInputX(e) {
   return e.clientX;
 }
 
+let isDragging = false;
+
 canvas.addEventListener('mousemove', (e) => {
   mouseX = e.clientX;
   dropX = mouseX;
@@ -434,17 +436,38 @@ canvas.addEventListener('touchmove', (e) => {
   e.preventDefault();
   mouseX = e.touches[0].clientX;
   dropX = mouseX;
+  isDragging = true;
 }, { passive: false });
 
 canvas.addEventListener('mousedown', (e) => {
-  handleClick(e.clientX, e.clientY);
+  isDragging = true;
+  mouseX = e.clientX;
+  dropX = e.clientX;
+  // For title/gameover screens, handle immediately
+  if (gameState !== 'playing') handleClick(e.clientX, e.clientY);
+});
+canvas.addEventListener('mouseup', (e) => {
+  if (isDragging && gameState === 'playing') {
+    dropX = e.clientX;
+    dropFruit();
+  }
+  isDragging = false;
 });
 canvas.addEventListener('touchstart', (e) => {
   e.preventDefault();
   const t = e.touches[0];
   mouseX = t.clientX;
   dropX = t.clientX;
-  handleClick(t.clientX, t.clientY);
+  isDragging = true;
+  // For title/gameover screens, handle immediately
+  if (gameState !== 'playing') handleClick(t.clientX, t.clientY);
+}, { passive: false });
+canvas.addEventListener('touchend', (e) => {
+  e.preventDefault();
+  if (isDragging && gameState === 'playing') {
+    dropFruit();
+  }
+  isDragging = false;
 }, { passive: false });
 
 function handleClick(cx, cy) {
@@ -466,7 +489,7 @@ function handleClick(cx, cy) {
   }
   if (gameState === 'playing') {
     dropX = cx;
-    dropFruit();
+    // Drop now handled on mouseup/touchend for drag-to-position
   }
 }
 
