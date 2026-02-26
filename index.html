@@ -1,0 +1,942 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Fruit Drop - Merge Game</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: #0a0a1a;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    touch-action: none;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  #gameCanvas {
+    display: block;
+    margin: 0 auto;
+    cursor: crosshair;
+  }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<script>
+// ============================================================
+//  FRUIT DROP - A Suika-style merge game
+// ============================================================
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// ---- Constants ----
+const GRAVITY = 0.35;
+const FRICTION = 0.985;
+const BOUNCE = 0.4;
+const WALL_BOUNCE = 0.3;
+const SUB_STEPS = 4;
+const DANGER_Y_RATIO = 0.12;
+const DANGER_GRACE = 180; // frames before game over
+const DROP_COOLDOWN = 20;
+
+// Fruit definitions: name, baseRadius, colors [main, light, dark], emoji
+const FRUITS = [
+  { name: 'Cherry',     r: 16,  colors: ['#e74c3c','#ff6b6b','#c0392b'], emoji: '\ud83c\udf52' },
+  { name: 'Strawberry', r: 22,  colors: ['#e91e63','#f06292','#c2185b'], emoji: '\ud83c\udf53' },
+  { name: 'Orange',     r: 29,  colors: ['#ff9800','#ffb74d','#f57c00'], emoji: '\ud83c\udf4a' },
+  { name: 'Apple',      r: 37,  colors: ['#f44336','#ef5350','#d32f2f'], emoji: '\ud83c\udf4e' },
+  { name: 'Pear',       r: 45,  colors: ['#8bc34a','#aed581','#689f38'], emoji: '\ud83c\udf50' },
+  { name: 'Peach',      r: 54,  colors: ['#ffab91','#ffccbc','#ff8a65'], emoji: '\ud83c\udf51' },
+  { name: 'Melon',      r: 64,  colors: ['#66bb6a','#a5d6a7','#43a047'], emoji: '\ud83c\udf48' },
+  { name: 'Pineapple',  r: 74,  colors: ['#fdd835','#fff176','#f9a825'], emoji: '\ud83c\udf4d' },
+  { name: 'Watermelon', r: 85,  colors: ['#4caf50','#81c784','#2e7d32'], emoji: '\ud83c\udf49' },
+];
+
+// ---- Game State ----
+let W, H, CONTAINER_X, CONTAINER_Y, CONTAINER_W, CONTAINER_H, SCALE;
+let fruits = [];
+let particles = [];
+let scorePopups = [];
+let score = 0;
+let highScore = parseInt(localStorage.getItem('fruitDropHighScore')) || 0;
+let combo = 0;
+let comboTimer = 0;
+let comboDisplay = 0;
+let currentFruitTier = 0;
+let nextFruitTier = 0;
+let dropX = 0;
+let dropCooldown = 0;
+let dangerTimer = 0;
+let shakeX = 0, shakeY = 0;
+let flashAlpha = 0;
+let gameState = 'title'; // title, playing, gameover
+let mouseX = 0;
+let frameCount = 0;
+let lastDroppedId = -1;
+let fruitIdCounter = 0;
+let titlePulse = 0;
+let gameOverAlpha = 0;
+
+// ---- Audio Engine ----
+let audioCtx = null;
+function initAudio() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+}
+
+function playTone(freq, duration, type, volume, detune) {
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type || 'sine';
+  osc.frequency.value = freq;
+  if (detune) osc.detune.value = detune;
+  gain.gain.setValueAtTime(volume || 0.15, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + (duration || 0.15));
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + (duration || 0.15));
+}
+
+function playDrop() {
+  playTone(400, 0.08, 'sine', 0.12);
+  playTone(300, 0.06, 'triangle', 0.06, 10);
+}
+
+function playMerge(tier) {
+  const baseFreq = 300 + tier * 60;
+  playTone(baseFreq, 0.15, 'sine', 0.18);
+  playTone(baseFreq * 1.5, 0.12, 'triangle', 0.1);
+  setTimeout(() => playTone(baseFreq * 2, 0.1, 'sine', 0.08), 50);
+}
+
+function playCombo(count) {
+  const freq = 500 + count * 80;
+  playTone(freq, 0.2, 'sine', 0.2);
+  playTone(freq * 1.25, 0.15, 'triangle', 0.12);
+  playTone(freq * 1.5, 0.12, 'sine', 0.08);
+}
+
+function playGameOver() {
+  playTone(300, 0.3, 'sawtooth', 0.15);
+  setTimeout(() => playTone(200, 0.4, 'sawtooth', 0.12), 150);
+  setTimeout(() => playTone(120, 0.6, 'sawtooth', 0.1), 350);
+}
+
+// ---- Resize / Layout ----
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  const ww = window.innerWidth;
+  const wh = window.innerHeight;
+
+  // Target aspect ratio for container ~0.56 (slightly taller than wide)
+  const targetW = Math.min(ww, 500);
+  const targetH = Math.min(wh, targetW * 1.7);
+  const finalW = Math.min(targetW, targetH / 1.7);
+
+  SCALE = finalW / 400;
+  W = Math.floor(ww);
+  H = Math.floor(wh);
+
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  CONTAINER_W = Math.floor(360 * SCALE);
+  CONTAINER_H = Math.floor(580 * SCALE);
+  CONTAINER_X = Math.floor((W - CONTAINER_W) / 2);
+  CONTAINER_Y = Math.floor(H - CONTAINER_H - 30 * SCALE);
+}
+
+window.addEventListener('resize', resize);
+resize();
+
+// ---- Fruit Object ----
+function createFruit(tier, x, y, dropped) {
+  return {
+    id: fruitIdCounter++,
+    tier: tier,
+    x: x,
+    y: y,
+    vx: 0,
+    vy: 0,
+    r: FRUITS[tier].r * SCALE,
+    settled: false,
+    settleCount: 0,
+    dropped: !!dropped,
+    alive: true,
+    spawnFrame: frameCount,
+    merging: false,
+    mergeScale: 1,
+  };
+}
+
+// ---- Particle System ----
+function spawnParticles(x, y, tier, count) {
+  const c = FRUITS[tier].colors;
+  for (let i = 0; i < count; i++) {
+    const angle = (Math.PI * 2 * i) / count + Math.random() * 0.5;
+    const speed = 2 + Math.random() * 5;
+    particles.push({
+      x: x,
+      y: y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed - 2,
+      r: 2 + Math.random() * 4,
+      life: 1,
+      decay: 0.015 + Math.random() * 0.02,
+      color: c[Math.floor(Math.random() * c.length)],
+    });
+  }
+}
+
+function spawnScorePopup(x, y, value, isCombo) {
+  scorePopups.push({
+    x: x,
+    y: y,
+    value: value,
+    life: 1,
+    isCombo: isCombo,
+  });
+}
+
+// ---- Physics ----
+function updatePhysics() {
+  const steps = SUB_STEPS;
+  const dt = 1 / steps;
+
+  for (let s = 0; s < steps; s++) {
+    // Gravity & velocity
+    for (let i = 0; i < fruits.length; i++) {
+      const f = fruits[i];
+      if (!f.alive || f.merging) continue;
+      f.vy += GRAVITY * dt;
+      f.x += f.vx * dt;
+      f.y += f.vy * dt;
+      f.vx *= FRICTION;
+      f.vy *= FRICTION;
+    }
+
+    // Wall constraints
+    for (let i = 0; i < fruits.length; i++) {
+      const f = fruits[i];
+      if (!f.alive || f.merging) continue;
+
+      // Left wall
+      if (f.x - f.r < CONTAINER_X) {
+        f.x = CONTAINER_X + f.r;
+        f.vx = Math.abs(f.vx) * WALL_BOUNCE;
+      }
+      // Right wall
+      if (f.x + f.r > CONTAINER_X + CONTAINER_W) {
+        f.x = CONTAINER_X + CONTAINER_W - f.r;
+        f.vx = -Math.abs(f.vx) * WALL_BOUNCE;
+      }
+      // Floor
+      if (f.y + f.r > CONTAINER_Y + CONTAINER_H) {
+        f.y = CONTAINER_Y + CONTAINER_H - f.r;
+        f.vy = -Math.abs(f.vy) * BOUNCE;
+        f.vx *= 0.95;
+      }
+    }
+
+    // Collision detection & resolution
+    for (let i = 0; i < fruits.length; i++) {
+      const a = fruits[i];
+      if (!a.alive || a.merging) continue;
+      for (let j = i + 1; j < fruits.length; j++) {
+        const b = fruits[j];
+        if (!b.alive || b.merging) continue;
+
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const minDist = a.r + b.r;
+
+        if (dist < minDist && dist > 0.01) {
+          // Resolve overlap
+          const nx = dx / dist;
+          const ny = dy / dist;
+          const overlap = minDist - dist;
+          const massA = a.r * a.r;
+          const massB = b.r * b.r;
+          const totalMass = massA + massB;
+
+          a.x -= nx * overlap * (massB / totalMass) * 0.5;
+          a.y -= ny * overlap * (massB / totalMass) * 0.5;
+          b.x += nx * overlap * (massA / totalMass) * 0.5;
+          b.y += ny * overlap * (massA / totalMass) * 0.5;
+
+          // Velocity exchange
+          const relVx = a.vx - b.vx;
+          const relVy = a.vy - b.vy;
+          const relDot = relVx * nx + relVy * ny;
+
+          if (relDot > 0) {
+            const restitution = 0.3;
+            const impulse = (1 + restitution) * relDot / totalMass;
+            a.vx -= impulse * massB * nx;
+            a.vy -= impulse * massB * ny;
+            b.vx += impulse * massA * nx;
+            b.vy += impulse * massA * ny;
+          }
+
+          // Merge check: same tier, both dropped, not already watermelon
+          if (a.tier === b.tier && a.tier < FRUITS.length - 1 && a.dropped && b.dropped) {
+            // Skip if just spawned (avoid instant chain issues)
+            if (frameCount - a.spawnFrame < 3 || frameCount - b.spawnFrame < 3) continue;
+            mergeFruits(a, b);
+          }
+        }
+      }
+    }
+  }
+
+  // Check settled state
+  for (let i = 0; i < fruits.length; i++) {
+    const f = fruits[i];
+    if (!f.alive) continue;
+    const speed = Math.abs(f.vx) + Math.abs(f.vy);
+    if (speed < 0.5) {
+      f.settleCount++;
+      if (f.settleCount > 30) f.settled = true;
+    } else {
+      f.settleCount = 0;
+      f.settled = false;
+    }
+  }
+
+  // Remove dead fruits
+  fruits = fruits.filter(f => f.alive);
+}
+
+function mergeFruits(a, b) {
+  const newTier = a.tier + 1;
+  const mx = (a.x + b.x) / 2;
+  const my = (a.y + b.y) / 2;
+
+  a.alive = false;
+  b.alive = false;
+
+  // Create merged fruit
+  const newFruit = createFruit(newTier, mx, my, true);
+  newFruit.vx = (a.vx + b.vx) * 0.3;
+  newFruit.vy = (a.vy + b.vy) * 0.3 - 1.5;
+  newFruit.mergeScale = 0.3;
+  fruits.push(newFruit);
+
+  // Score
+  const points = (newTier + 1) * (newTier + 1) * 10;
+  score += points * (1 + combo * 0.5);
+  if (score > highScore) {
+    highScore = Math.floor(score);
+    localStorage.setItem('fruitDropHighScore', highScore);
+  }
+
+  // Combo
+  combo++;
+  comboTimer = 90;
+  if (combo > 1) {
+    comboDisplay = combo;
+    playCombo(combo);
+    flashAlpha = Math.min(0.3, combo * 0.08);
+  }
+
+  // Effects
+  spawnParticles(mx, my, newTier, 12 + newTier * 3);
+  spawnScorePopup(mx, my, Math.floor(points * (1 + combo * 0.5)), combo > 1);
+  playMerge(newTier);
+
+  // Screen shake scaled by tier
+  const shakeAmt = (2 + newTier * 1.5) * SCALE;
+  shakeX = (Math.random() - 0.5) * shakeAmt;
+  shakeY = (Math.random() - 0.5) * shakeAmt;
+}
+
+// ---- Drop Logic ----
+function pickNextTier() {
+  // Weighted random: heavily favor smaller fruits
+  const weights = [35, 28, 20, 12, 5];
+  const total = weights.reduce((a, b) => a + b, 0);
+  let r = Math.random() * total;
+  for (let i = 0; i < weights.length; i++) {
+    r -= weights[i];
+    if (r <= 0) return i;
+  }
+  return 0;
+}
+
+function dropFruit() {
+  if (dropCooldown > 0) return;
+  if (gameState !== 'playing') return;
+
+  const x = Math.max(CONTAINER_X + FRUITS[currentFruitTier].r * SCALE,
+    Math.min(CONTAINER_X + CONTAINER_W - FRUITS[currentFruitTier].r * SCALE, dropX));
+
+  const f = createFruit(currentFruitTier, x, CONTAINER_Y - 5 * SCALE, true);
+  f.vy = 2;
+  fruits.push(f);
+  lastDroppedId = f.id;
+
+  playDrop();
+  dropCooldown = DROP_COOLDOWN;
+
+  currentFruitTier = nextFruitTier;
+  nextFruitTier = pickNextTier();
+}
+
+// ---- Danger / Game Over Check ----
+function checkGameOver() {
+  let inDanger = false;
+  const dangerY = CONTAINER_Y + CONTAINER_H * DANGER_Y_RATIO;
+
+  for (let i = 0; i < fruits.length; i++) {
+    const f = fruits[i];
+    if (!f.alive || !f.dropped) continue;
+    // Must have been alive for a while and be settled
+    if (frameCount - f.spawnFrame > 60 && f.y - f.r < dangerY && f.settled) {
+      inDanger = true;
+      break;
+    }
+  }
+
+  if (inDanger) {
+    dangerTimer++;
+    if (dangerTimer > DANGER_GRACE) {
+      gameState = 'gameover';
+      gameOverAlpha = 0;
+      playGameOver();
+    }
+  } else {
+    dangerTimer = Math.max(0, dangerTimer - 2);
+  }
+}
+
+// ---- Input Handling ----
+function getInputX(e) {
+  if (e.touches) return e.touches[0].clientX;
+  return e.clientX;
+}
+
+canvas.addEventListener('mousemove', (e) => {
+  mouseX = e.clientX;
+  dropX = mouseX;
+});
+canvas.addEventListener('touchmove', (e) => {
+  e.preventDefault();
+  mouseX = e.touches[0].clientX;
+  dropX = mouseX;
+}, { passive: false });
+
+canvas.addEventListener('mousedown', (e) => {
+  handleClick(e.clientX, e.clientY);
+});
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  const t = e.touches[0];
+  mouseX = t.clientX;
+  dropX = t.clientX;
+  handleClick(t.clientX, t.clientY);
+}, { passive: false });
+
+function handleClick(cx, cy) {
+  initAudio();
+  if (gameState === 'title') {
+    startGame();
+    return;
+  }
+  if (gameState === 'gameover') {
+    // Check if click is on restart button area
+    const btnX = W / 2;
+    const btnY = H / 2 + 80 * SCALE;
+    const btnW = 180 * SCALE;
+    const btnH = 50 * SCALE;
+    if (cx > btnX - btnW/2 && cx < btnX + btnW/2 && cy > btnY - btnH/2 && cy < btnY + btnH/2) {
+      startGame();
+    }
+    return;
+  }
+  if (gameState === 'playing') {
+    dropX = cx;
+    dropFruit();
+  }
+}
+
+// ---- Game Flow ----
+function startGame() {
+  fruits = [];
+  particles = [];
+  scorePopups = [];
+  score = 0;
+  combo = 0;
+  comboTimer = 0;
+  comboDisplay = 0;
+  dangerTimer = 0;
+  dropCooldown = 0;
+  gameState = 'playing';
+  currentFruitTier = pickNextTier();
+  nextFruitTier = pickNextTier();
+  dropX = W / 2;
+  mouseX = W / 2;
+}
+
+// ---- Rendering ----
+function drawBackground() {
+  // Deep gradient bg
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#0d0d2b');
+  grad.addColorStop(0.5, '#1a1a3e');
+  grad.addColorStop(1, '#0d0d2b');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Subtle stars
+  ctx.fillStyle = 'rgba(255,255,255,0.03)';
+  for (let i = 0; i < 50; i++) {
+    const sx = (Math.sin(i * 127.1) * 0.5 + 0.5) * W;
+    const sy = (Math.cos(i * 311.7) * 0.5 + 0.5) * H;
+    const sr = 1 + (i % 3);
+    ctx.beginPath();
+    ctx.arc(sx, sy, sr, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawContainer() {
+  // Container bg with subtle gradient
+  const cGrad = ctx.createLinearGradient(CONTAINER_X, CONTAINER_Y, CONTAINER_X, CONTAINER_Y + CONTAINER_H);
+  cGrad.addColorStop(0, 'rgba(20, 20, 60, 0.6)');
+  cGrad.addColorStop(1, 'rgba(10, 10, 40, 0.8)');
+  ctx.fillStyle = cGrad;
+
+  // Rounded rect container
+  const cr = 12 * SCALE;
+  ctx.beginPath();
+  ctx.moveTo(CONTAINER_X + cr, CONTAINER_Y);
+  ctx.lineTo(CONTAINER_X + CONTAINER_W - cr, CONTAINER_Y);
+  ctx.quadraticCurveTo(CONTAINER_X + CONTAINER_W, CONTAINER_Y, CONTAINER_X + CONTAINER_W, CONTAINER_Y + cr);
+  ctx.lineTo(CONTAINER_X + CONTAINER_W, CONTAINER_Y + CONTAINER_H - cr);
+  ctx.quadraticCurveTo(CONTAINER_X + CONTAINER_W, CONTAINER_Y + CONTAINER_H, CONTAINER_X + CONTAINER_W - cr, CONTAINER_Y + CONTAINER_H);
+  ctx.lineTo(CONTAINER_X + cr, CONTAINER_Y + CONTAINER_H);
+  ctx.quadraticCurveTo(CONTAINER_X, CONTAINER_Y + CONTAINER_H, CONTAINER_X, CONTAINER_Y + CONTAINER_H - cr);
+  ctx.lineTo(CONTAINER_X, CONTAINER_Y + cr);
+  ctx.quadraticCurveTo(CONTAINER_X, CONTAINER_Y, CONTAINER_X + cr, CONTAINER_Y);
+  ctx.closePath();
+  ctx.fill();
+
+  // Container border - glowing
+  ctx.strokeStyle = 'rgba(100, 100, 255, 0.3)';
+  ctx.lineWidth = 2 * SCALE;
+  ctx.stroke();
+
+  // Danger line
+  const dangerY = CONTAINER_Y + CONTAINER_H * DANGER_Y_RATIO;
+  const dangerAlpha = dangerTimer > 0 ? 0.3 + Math.sin(frameCount * 0.15) * 0.2 : 0.15;
+  ctx.strokeStyle = `rgba(255, 60, 60, ${dangerAlpha})`;
+  ctx.lineWidth = 1.5 * SCALE;
+  ctx.setLineDash([8 * SCALE, 6 * SCALE]);
+  ctx.beginPath();
+  ctx.moveTo(CONTAINER_X + 8, dangerY);
+  ctx.lineTo(CONTAINER_X + CONTAINER_W - 8, dangerY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  if (dangerTimer > 60) {
+    ctx.fillStyle = `rgba(255, 0, 0, ${0.02 + Math.sin(frameCount * 0.2) * 0.02})`;
+    ctx.fillRect(CONTAINER_X, CONTAINER_Y, CONTAINER_W, dangerY - CONTAINER_Y);
+  }
+}
+
+function drawFruit(f) {
+  if (!f.alive) return;
+  const tier = FRUITS[f.tier];
+  const s = f.mergeScale || 1;
+  const r = f.r * s;
+
+  ctx.save();
+  ctx.translate(f.x, f.y);
+
+  // Outer glow
+  const glowGrad = ctx.createRadialGradient(0, 0, r * 0.8, 0, 0, r * 1.5);
+  glowGrad.addColorStop(0, tier.colors[0] + '30');
+  glowGrad.addColorStop(1, 'transparent');
+  ctx.fillStyle = glowGrad;
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 1.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Main body gradient
+  const bodyGrad = ctx.createRadialGradient(-r * 0.25, -r * 0.3, r * 0.1, 0, 0, r);
+  bodyGrad.addColorStop(0, tier.colors[1]);
+  bodyGrad.addColorStop(0.7, tier.colors[0]);
+  bodyGrad.addColorStop(1, tier.colors[2]);
+  ctx.fillStyle = bodyGrad;
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Shine highlight
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.25)';
+  ctx.beginPath();
+  ctx.ellipse(-r * 0.2, -r * 0.3, r * 0.45, r * 0.3, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Emoji face
+  const fontSize = Math.max(10, r * 1.1);
+  ctx.font = `${fontSize}px serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(tier.emoji, 0, 1);
+
+  // Border ring
+  ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+  ctx.lineWidth = 1.5 * SCALE;
+  ctx.beginPath();
+  ctx.arc(0, 0, r - 1, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawParticles() {
+  for (let i = 0; i < particles.length; i++) {
+    const p = particles[i];
+    ctx.globalAlpha = p.life;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r * p.life, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawScorePopups() {
+  for (let i = 0; i < scorePopups.length; i++) {
+    const p = scorePopups[i];
+    const alpha = p.life;
+    const yOff = (1 - p.life) * 60 * SCALE;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.isCombo ? '#ffe082' : '#fff';
+    ctx.font = `bold ${(p.isCombo ? 22 : 18) * SCALE}px system-ui`;
+    ctx.textAlign = 'center';
+    ctx.fillText('+' + Math.floor(p.value), p.x, p.y - yOff);
+    if (p.isCombo) {
+      ctx.font = `bold ${14 * SCALE}px system-ui`;
+      ctx.fillStyle = '#ffab40';
+      ctx.fillText(`COMBO x${comboDisplay}`, p.x, p.y - yOff - 22 * SCALE);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawDropPreview() {
+  if (gameState !== 'playing' || dropCooldown > 8) return;
+
+  const tier = FRUITS[currentFruitTier];
+  const r = tier.r * SCALE;
+  const x = Math.max(CONTAINER_X + r, Math.min(CONTAINER_X + CONTAINER_W - r, dropX));
+  const y = CONTAINER_Y - 15 * SCALE;
+
+  // Guide line
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4 * SCALE, 4 * SCALE]);
+  ctx.beginPath();
+  ctx.moveTo(x, y + r);
+  ctx.lineTo(x, CONTAINER_Y + CONTAINER_H);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Preview fruit (slightly transparent)
+  ctx.globalAlpha = 0.7 + Math.sin(frameCount * 0.1) * 0.15;
+  const previewFruit = { x, y, r, tier: currentFruitTier, alive: true, mergeScale: 1 };
+  drawFruit(previewFruit);
+  ctx.globalAlpha = 1;
+}
+
+function drawUI() {
+  // Score panel
+  const panelW = CONTAINER_W;
+  const panelX = CONTAINER_X;
+  const panelY = 12 * SCALE;
+
+  // Score
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.font = `bold ${24 * SCALE}px system-ui`;
+  ctx.textAlign = 'left';
+  ctx.fillText(Math.floor(score).toLocaleString(), panelX + 5, panelY + 28 * SCALE);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.font = `${12 * SCALE}px system-ui`;
+  ctx.fillText('SCORE', panelX + 5, panelY + 8 * SCALE);
+
+  // High score
+  ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(255,215,0,0.7)';
+  ctx.font = `bold ${16 * SCALE}px system-ui`;
+  ctx.fillText(Math.floor(highScore).toLocaleString(), panelX + panelW - 5, panelY + 28 * SCALE);
+
+  ctx.fillStyle = 'rgba(255,215,0,0.4)';
+  ctx.font = `${12 * SCALE}px system-ui`;
+  ctx.fillText('BEST', panelX + panelW - 5, panelY + 8 * SCALE);
+
+  // Next piece preview
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.font = `${11 * SCALE}px system-ui`;
+  const nextX = panelX + panelW / 2;
+  ctx.fillText('NEXT', nextX, panelY + 8 * SCALE);
+
+  const nextTier = FRUITS[nextFruitTier];
+  const nextR = nextTier.r * SCALE * 0.6;
+  const previewFruit = { x: nextX, y: panelY + 26 * SCALE, r: nextR, tier: nextFruitTier, alive: true, mergeScale: 1 };
+  drawFruit(previewFruit);
+
+  // Combo display
+  if (comboDisplay > 1 && comboTimer > 0) {
+    const comboAlpha = Math.min(1, comboTimer / 30);
+    ctx.globalAlpha = comboAlpha;
+    ctx.fillStyle = '#ffe082';
+    ctx.font = `bold ${32 * SCALE}px system-ui`;
+    ctx.textAlign = 'center';
+    ctx.fillText(`COMBO x${comboDisplay}!`, W / 2, CONTAINER_Y - 30 * SCALE);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawTitleScreen() {
+  drawBackground();
+  titlePulse += 0.03;
+
+  // Title
+  const titleY = H * 0.28;
+  ctx.textAlign = 'center';
+
+  // Glow
+  ctx.shadowColor = '#8b5cf6';
+  ctx.shadowBlur = 30 + Math.sin(titlePulse) * 10;
+  ctx.fillStyle = '#fff';
+  ctx.font = `bold ${48 * SCALE}px system-ui`;
+  ctx.fillText('FRUIT DROP', W / 2, titleY);
+  ctx.shadowBlur = 0;
+
+  // Subtitle
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.font = `${16 * SCALE}px system-ui`;
+  ctx.fillText('A Merge Puzzle Game', W / 2, titleY + 38 * SCALE);
+
+  // Animated fruits
+  const displayFruits = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+  const centerY = H * 0.5;
+  for (let i = 0; i < displayFruits.length; i++) {
+    const t = displayFruits[i];
+    const angle = (i / displayFruits.length) * Math.PI * 2 + titlePulse * 0.5;
+    const rx = 120 * SCALE;
+    const ry = 50 * SCALE;
+    const fx = W / 2 + Math.cos(angle) * rx;
+    const fy = centerY + Math.sin(angle) * ry;
+    const sz = 0.5 + (Math.sin(angle) + 1) * 0.25;
+    const preview = { x: fx, y: fy, r: FRUITS[t].r * SCALE * sz * 0.7, tier: t, alive: true, mergeScale: 1 };
+    ctx.globalAlpha = 0.5 + (Math.sin(angle) + 1) * 0.25;
+    drawFruit(preview);
+  }
+  ctx.globalAlpha = 1;
+
+  // Tap to start
+  const startAlpha = 0.5 + Math.sin(titlePulse * 2) * 0.3;
+  ctx.fillStyle = `rgba(255, 255, 255, ${startAlpha})`;
+  ctx.font = `${20 * SCALE}px system-ui`;
+  ctx.fillText('Tap to Start', W / 2, H * 0.72);
+
+  // High score
+  if (highScore > 0) {
+    ctx.fillStyle = 'rgba(255,215,0,0.6)';
+    ctx.font = `${14 * SCALE}px system-ui`;
+    ctx.fillText(`Best: ${highScore.toLocaleString()}`, W / 2, H * 0.78);
+  }
+
+  // How to play
+  ctx.fillStyle = 'rgba(255,255,255,0.25)';
+  ctx.font = `${12 * SCALE}px system-ui`;
+  ctx.fillText('Drop fruits. Match pairs to merge!', W / 2, H * 0.88);
+}
+
+function drawGameOver() {
+  gameOverAlpha = Math.min(1, gameOverAlpha + 0.02);
+
+  // Dark overlay
+  ctx.fillStyle = `rgba(0, 0, 0, ${gameOverAlpha * 0.7})`;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.globalAlpha = gameOverAlpha;
+  ctx.textAlign = 'center';
+
+  // Game Over text
+  ctx.shadowColor = '#e74c3c';
+  ctx.shadowBlur = 20;
+  ctx.fillStyle = '#fff';
+  ctx.font = `bold ${42 * SCALE}px system-ui`;
+  ctx.fillText('GAME OVER', W / 2, H / 2 - 60 * SCALE);
+  ctx.shadowBlur = 0;
+
+  // Final score
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.font = `bold ${28 * SCALE}px system-ui`;
+  ctx.fillText(Math.floor(score).toLocaleString(), W / 2, H / 2 - 10 * SCALE);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.font = `${14 * SCALE}px system-ui`;
+  ctx.fillText('SCORE', W / 2, H / 2 - 35 * SCALE);
+
+  // New high score badge
+  if (Math.floor(score) >= highScore && score > 0) {
+    ctx.fillStyle = '#ffd700';
+    ctx.font = `bold ${16 * SCALE}px system-ui`;
+    ctx.fillText('NEW BEST!', W / 2, H / 2 + 18 * SCALE);
+  }
+
+  // Restart button
+  const btnX = W / 2;
+  const btnY = H / 2 + 80 * SCALE;
+  const btnW = 180 * SCALE;
+  const btnH = 50 * SCALE;
+
+  // Button bg
+  const btnGrad = ctx.createLinearGradient(btnX - btnW/2, btnY - btnH/2, btnX + btnW/2, btnY + btnH/2);
+  btnGrad.addColorStop(0, '#7c3aed');
+  btnGrad.addColorStop(1, '#5b21b6');
+  ctx.fillStyle = btnGrad;
+  const btnR = 12 * SCALE;
+  ctx.beginPath();
+  ctx.moveTo(btnX - btnW/2 + btnR, btnY - btnH/2);
+  ctx.lineTo(btnX + btnW/2 - btnR, btnY - btnH/2);
+  ctx.quadraticCurveTo(btnX + btnW/2, btnY - btnH/2, btnX + btnW/2, btnY - btnH/2 + btnR);
+  ctx.lineTo(btnX + btnW/2, btnY + btnH/2 - btnR);
+  ctx.quadraticCurveTo(btnX + btnW/2, btnY + btnH/2, btnX + btnW/2 - btnR, btnY + btnH/2);
+  ctx.lineTo(btnX - btnW/2 + btnR, btnY + btnH/2);
+  ctx.quadraticCurveTo(btnX - btnW/2, btnY + btnH/2, btnX - btnW/2, btnY + btnH/2 - btnR);
+  ctx.lineTo(btnX - btnW/2, btnY - btnH/2 + btnR);
+  ctx.quadraticCurveTo(btnX - btnW/2, btnY - btnH/2, btnX - btnW/2 + btnR, btnY - btnH/2);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = '#fff';
+  ctx.font = `bold ${18 * SCALE}px system-ui`;
+  ctx.fillText('Play Again', btnX, btnY + 6 * SCALE);
+
+  ctx.globalAlpha = 1;
+}
+
+// ---- Update Loop ----
+function update() {
+  frameCount++;
+
+  if (gameState === 'playing') {
+    dropCooldown = Math.max(0, dropCooldown - 1);
+    updatePhysics();
+    checkGameOver();
+
+    // Combo timer
+    if (comboTimer > 0) {
+      comboTimer--;
+      if (comboTimer <= 0) {
+        combo = 0;
+        comboDisplay = 0;
+      }
+    }
+
+    // Merge scale animation
+    for (let i = 0; i < fruits.length; i++) {
+      const f = fruits[i];
+      if (f.mergeScale < 1) {
+        f.mergeScale = Math.min(1, f.mergeScale + 0.08);
+      }
+    }
+  }
+
+  // Particles
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.15;
+    p.life -= p.decay;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+
+  // Score popups
+  for (let i = scorePopups.length - 1; i >= 0; i--) {
+    scorePopups[i].life -= 0.018;
+    if (scorePopups[i].life <= 0) scorePopups.splice(i, 1);
+  }
+
+  // Screen shake decay
+  shakeX *= 0.85;
+  shakeY *= 0.85;
+  if (Math.abs(shakeX) < 0.1) shakeX = 0;
+  if (Math.abs(shakeY) < 0.1) shakeY = 0;
+
+  // Flash decay
+  flashAlpha *= 0.92;
+  if (flashAlpha < 0.005) flashAlpha = 0;
+}
+
+function draw() {
+  ctx.save();
+
+  if (gameState === 'title') {
+    drawTitleScreen();
+    ctx.restore();
+    return;
+  }
+
+  // Apply screen shake
+  ctx.translate(shakeX, shakeY);
+
+  drawBackground();
+  drawContainer();
+  drawDropPreview();
+
+  // Draw fruits (sorted by y for slight depth)
+  const sorted = fruits.slice().sort((a, b) => a.y - b.y);
+  for (let i = 0; i < sorted.length; i++) {
+    drawFruit(sorted[i]);
+  }
+
+  drawParticles();
+  drawScorePopups();
+
+  ctx.restore();
+
+  drawUI();
+
+  // Flash overlay
+  if (flashAlpha > 0) {
+    ctx.fillStyle = `rgba(255, 255, 200, ${flashAlpha})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  if (gameState === 'gameover') {
+    drawGameOver();
+  }
+}
+
+// ---- Main Loop ----
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
